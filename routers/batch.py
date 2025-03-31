@@ -3,7 +3,8 @@ from typing import List
 import tempfile
 import os
 import asyncio
-from services.chunking import chunk_pdf_file
+import fitz  # PyMuPDF
+from services.chunking import chunk_text
 from services.embeddings import embed_chunks
 from vector_store import store_embeddings
 
@@ -29,9 +30,15 @@ async def batch_upload(
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                 tmp.write(contents)
+                tmp.flush()
                 tmp_path = tmp.name
 
-            chunks = chunk_pdf_file(tmp_path)
+            # Extract text with PyMuPDF
+            doc = fitz.open(tmp_path)
+            text = "\n".join([page.get_text() for page in doc])
+
+            # Chunk, embed, store
+            chunks = chunk_text(text)
             embeddings = embed_chunks(chunks)
             store_embeddings(embeddings, metadata={"filename": filename}, overwrite=overwrite)
 
@@ -40,12 +47,7 @@ async def batch_upload(
         except Exception as e:
             return {"file": filename, "error": str(e)}
 
-    # Run file uploads concurrently
-    upload_tasks = [
-        process_file(filename, contents)
-        for filename, contents in file_data
-    ]
-
+    upload_tasks = [process_file(filename, contents) for filename, contents in file_data]
     results += await asyncio.gather(*upload_tasks)
 
     return {"status": "accepted", "results": results}
