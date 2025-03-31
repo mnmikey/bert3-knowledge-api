@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: bert3-knowledge-api
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port 10000"
+    envVars:
+      - key: QDRANT_URL
+        value: ${QDRANT_URL}
+      - key: QDRANT_API_KEY
+        value: ${QDRANT_API_KEY}
+      - key: OPENAI_API_KEY
+        value: ${OPENAI_API_KEY}
