@@ -6,7 +6,7 @@ import asyncio
 import fitz  # PyMuPDF
 from services.chunking import chunk_text
 from services.embeddings import embed_chunks
-from vector_store import store_embeddings
+from vector_store import add_to_vector_store  # ✅ Corrected import
 
 router = APIRouter()
 
@@ -40,7 +40,12 @@ async def batch_upload(
             # Chunk, embed, store
             chunks = chunk_text(text)
             embeddings = embed_chunks(chunks)
-            store_embeddings(embeddings, metadata={"filename": filename}, overwrite=overwrite)
+            add_to_vector_store(  # ✅ Corrected call
+                file_path=filename,
+                chunks=chunks,
+                embeddings=embeddings,
+                overwrite=overwrite
+            )
 
             os.remove(tmp_path)
             return {"file": filename, "status": "uploaded"}
