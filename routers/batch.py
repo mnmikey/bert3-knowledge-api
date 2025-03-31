@@ -1,56 +1,51 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query, BackgroundTasks
-from services.chunking import chunk_text
-from services.embeddings import embed_chunks
-from vector_store import upsert_vectors, compute_hash
-import fitz
+from fastapi import APIRouter, UploadFile, File, Query
 from typing import List
-import traceback
 import tempfile
 import os
+import asyncio
+from services.chunking import chunk_pdf_file
+from services.embeddings import embed_chunks
+from vector_store import store_embeddings
 
 router = APIRouter()
 
-
-def extract_text_from_pdf(path: str):
-    doc = fitz.open(path)
-    return "\n".join([page.get_text() for page in doc])
-
-
-@router.post("/")
+@router.post("/batch_upload/")
 async def batch_upload(
-    background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
-    overwrite: bool = Query(False)
+    overwrite: bool = Query(default=False)
 ):
+    results = []
+
+    # Read all file contents first while request context is still open
+    file_data = []
     for file in files:
-        background_tasks.add_task(process_file, file, overwrite)
-    return {"status": "accepted", "queued_files": [f.filename for f in files]}
+        try:
+            content = await file.read()
+            file_data.append((file.filename, content))
+        except Exception as e:
+            results.append({"file": file.filename, "error": f"read failure: {str(e)}"})
 
+    async def process_file(filename, contents):
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(contents)
+                tmp_path = tmp.name
 
-def process_file(file: UploadFile, overwrite: bool):
-    try:
-        print(f"📄 Queued: {file.filename}")
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(file.file.read())
-            tmp_path = tmp.name
+            chunks = chunk_pdf_file(tmp_path)
+            embeddings = embed_chunks(chunks)
+            store_embeddings(embeddings, metadata={"filename": filename}, overwrite=overwrite)
 
-        file.file.close()
+            os.remove(tmp_path)
+            return {"file": filename, "status": "uploaded"}
+        except Exception as e:
+            return {"file": filename, "error": str(e)}
 
-        text = extract_text_from_pdf(tmp_path)
-        chunks = chunk_text(text)
-        print(f"🔹 {file.filename} → {len(chunks)} chunks")
+    # Run file uploads concurrently
+    upload_tasks = [
+        process_file(filename, contents)
+        for filename, contents in file_data
+    ]
 
-        if not chunks:
-            raise ValueError("No chunks generated from file.")
+    results += await asyncio.gather(*upload_tasks)
 
-        embeddings = embed_chunks(chunks)
-        print(f"🔸 {file.filename} → {len(embeddings)} embeddings")
-
-        doc_hash = compute_hash(text)
-        upsert_vectors(chunks, embeddings, filename=file.filename, doc_hash=doc_hash, overwrite=overwrite)
-        print(f"✅ Upserted {len(embeddings)} to Qdrant for: {file.filename}")
-
-        os.remove(tmp_path)
-    except Exception as e:
-        tb = traceback.format_exc()
-        print(f"❌ Error processing {file.filename}: {e}\n{tb}")
+    return {"status": "accepted", "results": results}
