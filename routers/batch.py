@@ -1,20 +1,26 @@
-from fastapi import APIRouter, UploadFile, File, BackgroundTasks, Form
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query, BackgroundTasks
+from services.chunking import chunk_text
+from services.embeddings import embed_chunks
+from vector_store import upsert_vectors, compute_hash
+import fitz
 from typing import List
+import traceback
 import tempfile
 import os
-from services.chunking import chunk_pdf_file
-from services.embeddings import embed_chunks
-from vector_store import upsert_documents
-import hashlib
 
 router = APIRouter()
 
 
-@router.post("/batch_upload")
+def extract_text_from_pdf(path: str):
+    doc = fitz.open(path)
+    return "\n".join([page.get_text() for page in doc])
+
+
+@router.post("/")
 async def batch_upload(
     background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
-    overwrite: bool = Form(False)
+    overwrite: bool = Query(False)
 ):
     for file in files:
         background_tasks.add_task(process_file, file, overwrite)
@@ -23,28 +29,28 @@ async def batch_upload(
 
 def process_file(file: UploadFile, overwrite: bool):
     try:
+        print(f"📄 Queued: {file.filename}")
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
             tmp.write(file.file.read())
             tmp_path = tmp.name
 
         file.file.close()
 
-        chunks = chunk_pdf_file(tmp_path)
+        text = extract_text_from_pdf(tmp_path)
+        chunks = chunk_text(text)
+        print(f"🔹 {file.filename} → {len(chunks)} chunks")
+
+        if not chunks:
+            raise ValueError("No chunks generated from file.")
+
         embeddings = embed_chunks(chunks)
+        print(f"🔸 {file.filename} → {len(embeddings)} embeddings")
 
-        file_hash = hashlib.sha256(file.filename.encode()).hexdigest()
+        doc_hash = compute_hash(text)
+        upsert_vectors(chunks, embeddings, filename=file.filename, doc_hash=doc_hash, overwrite=overwrite)
+        print(f"✅ Upserted {len(embeddings)} to Qdrant for: {file.filename}")
 
-        payloads = []
-        for i, chunk in enumerate(chunks):
-            payload = {
-                "file_name": file.filename,
-                "file_hash": file_hash,
-                "chunk_index": i,
-                "text": chunk,
-            }
-            payloads.append(payload)
-
-        upsert_documents(embeddings, payloads, overwrite=overwrite)
         os.remove(tmp_path)
     except Exception as e:
-        print(f"❌ Failed to process {file.filename}: {e}")
+        tb = traceback.format_exc()
+        print(f"❌ Error processing {file.filename}: {e}\n{tb}")
