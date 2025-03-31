@@ -4,6 +4,7 @@ from services.embeddings import embed_chunks
 from vector_store import upsert_vectors, compute_hash
 import fitz
 from typing import List
+import traceback
 
 router = APIRouter()
 
@@ -29,15 +30,28 @@ async def batch_upload(
 
     for file in files:
         try:
+            print(f"📄 Processing: {file.filename}")
             text = extract_text(file)
             chunks = chunk_text(text)
+            print(f"🔹 {file.filename} → {len(chunks)} chunks")
+
+            if not chunks:
+                raise ValueError("No chunks generated from file.")
+
             embeddings = embed_chunks(chunks)
+            print(f"🔸 {file.filename} → {len(embeddings)} embeddings")
+
             doc_hash = compute_hash(text)
             upsert_vectors(chunks, embeddings, filename=file.filename, doc_hash=doc_hash, overwrite=overwrite)
+            print(f"✅ Upserted {len(embeddings)} points to Qdrant for: {file.filename}")
+
             results["uploaded"].append(file.filename)
         except ValueError:
+            print(f"⚠️ Duplicate or skipped: {file.filename}")
             results["skipped"].append(file.filename)
         except Exception as e:
+            tb = traceback.format_exc()
+            print(f"❌ Error processing {file.filename}: {e}\n{tb}")
             results["errors"].append({"file": file.filename, "error": str(e)})
 
     return results
