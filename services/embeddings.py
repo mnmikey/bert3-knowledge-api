@@ -1,11 +1,11 @@
-import openai
 import os
+from openai import OpenAI
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def embed_chunks(chunks):
-    response = openai.Embedding.create(
-        input=chunks,
-        model="text-embedding-3-small"
+    response = client.embeddings.create(
+        model="text-embedding-3-small",
+        input=chunks
     )
-    return [d["embedding"] for d in response["data"]]
+    return [r.embedding for r in response.data]
