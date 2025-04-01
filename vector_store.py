@@ -1,69 +1,46 @@
-import hashlib
-import logging
 import os
 from qdrant_client import QdrantClient
-from qdrant_client.models import PointStruct, VectorParams, Distance
-from openai import OpenAI
+from qdrant_client.models import Distance, VectorParams, PointStruct
+from uuid import uuid4
 
-COLLECTION_NAME = "bert3-docs"
-
+# 👇 Connect to Qdrant Cloud
 client = QdrantClient(
-    url=os.getenv("QDRANT_HOST", "http://localhost:6333")
+    url=os.getenv("QDRANT_HOST"),
+    api_key=os.getenv("QDRANT_API_KEY")
 )
 
-# 🔒 Ensure collection exists
+COLLECTION_NAME = "bert3_docs"
+
+# 🔧 Ensure collection exists
 def ensure_collection_exists():
     existing = client.get_collections().collections
-    if COLLECTION_NAME not in [c.name for c in existing]:
-        client.recreate_collection(
+    if not any(col.name == COLLECTION_NAME for col in existing):
+        client.create_collection(
             collection_name=COLLECTION_NAME,
-            vectors_config=VectorParams(
-                size=1536,
-                distance=Distance.COSINE
-            )
+            vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
         )
 
 ensure_collection_exists()
 
-# ✅ Vector upload helper
-def add_to_vector_store(embeddings, metadata):
+# ✅ Add vectors to Qdrant
+def add_to_vector_store(vectors, metadata_list=None):
     points = []
-    for i, vector in enumerate(embeddings):
+    for i, vector in enumerate(vectors):
+        payload = metadata_list[i] if metadata_list else {}
         point = PointStruct(
-            id=hashlib.md5(f"{metadata['filename']}-{i}".encode()).hexdigest(),
+            id=str(uuid4()),
             vector=vector,
-            payload={
-                "filename": metadata["filename"],
-                "chunk_index": i,
-                "text": metadata["chunks"][i]
-            },
+            payload=payload
         )
         points.append(point)
 
     client.upsert(collection_name=COLLECTION_NAME, points=points)
-    logging.info(f"✅ Added {len(points)} vectors for {metadata['filename']}")
 
-# ✅ Semantic search helper
-def semantic_search(query, top_k=5):
-    openai = OpenAI()
-    response = openai.embeddings.create(
-        input=query,
-        model="text-embedding-ada-002"
-    )
-    query_vector = response.data[0].embedding
-
+# 🔍 Semantic search
+def semantic_search(query_vector, top_k=5):
     results = client.search(
         collection_name=COLLECTION_NAME,
         query_vector=query_vector,
-        limit=top_k,
+        limit=top_k
     )
-
-    return [
-        {
-            "score": result.score,
-            "text": result.payload.get("text"),
-            "filename": result.payload.get("filename"),
-            "chunk_index": result.payload.get("chunk_index")
-        }
-        for result in results
-    ]
+    return results
