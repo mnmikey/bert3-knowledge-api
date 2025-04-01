@@ -35,7 +35,7 @@ def document_exists(doc_hash):
     )
     return len(results[0]) > 0
 
-def upsert_vectors(chunks, embeddings, filename, doc_hash, overwrite=False):
+def add_to_vector_store(chunks, embeddings, filename, doc_hash, overwrite=False):
     if not overwrite and document_exists(doc_hash):
         raise ValueError("Duplicate document detected")
 
