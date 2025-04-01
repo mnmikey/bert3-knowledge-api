@@ -7,9 +7,6 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import PointStruct, VectorParams, Distance
 from openai import OpenAI
 from uuid import uuid4
-from dotenv import load_dotenv
-
-load_dotenv()
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
