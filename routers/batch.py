@@ -1,16 +1,12 @@
 from fastapi import APIRouter, UploadFile, File, Query
 from typing import List
-import tempfile
-import os
-import asyncio
-import logging
+import tempfile, os, asyncio, logging
 
 from services.chunking import chunk_text
 from services.embeddings import embed_chunks
-from vector_store import add_to_vector_store, compute_hash
+from vector_store import add_to_vector_store
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
 
 @router.post("/")
 async def batch_upload(
@@ -19,55 +15,34 @@ async def batch_upload(
 ):
     results = []
 
-    # Read files into memory while still in request context
     file_data = []
     for file in files:
         try:
             content = await file.read()
-            file_data.append((file.filename, content))
+            file_data.append((file.filename, content.decode('utf-8', errors='ignore')))
         except Exception as e:
             results.append({"file": file.filename, "error": f"read failure: {str(e)}"})
 
-    async def process_file(filename, contents):
+    async def process_file(filename, content):
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                tmp.write(contents)
-                tmp_path = tmp.name
+            logging.info(f"📄 Processing: {filename}")
 
-            with open(tmp_path, "rb") as f:
-                text = f.read().decode("utf-8", errors="ignore")
-
-            os.remove(tmp_path)
-
-            if not text.strip():
-                raise ValueError("No text content extracted from file")
-
-            chunks = chunk_text(text)
+            chunks = chunk_text(content)
             if not chunks:
-                raise ValueError("Text was extracted but chunking returned no results")
+                return {"file": filename, "error": "No chunks generated."}
 
             embeddings = embed_chunks(chunks)
-            doc_hash = compute_hash(text)
+            if not embeddings:
+                return {"file": filename, "error": "Embedding generation failed."}
 
-            add_to_vector_store(
-                embeddings,
-                metadata={"filename": filename, "hash": doc_hash},
-                overwrite=overwrite
-            )
+            metadata = [{"filename": filename, "chunk_index": idx} for idx in range(len(embeddings))]
+            add_to_vector_store(embeddings, metadata, overwrite=overwrite)
 
-            logger.info(f"✅ Uploaded: {filename}")
-            return {"file": filename, "status": "uploaded"}
-
+            return {"file": filename, "status": "uploaded", "chunks": len(chunks)}
         except Exception as e:
-            logger.error(f"❌ Error: {filename} | {str(e)}")
             return {"file": filename, "error": str(e)}
 
-    # Process files concurrently
-    upload_tasks = [
-        process_file(filename, contents)
-        for filename, contents in file_data
-    ]
+    tasks = [process_file(fname, content) for fname, content in file_data]
+    results += await asyncio.gather(*tasks)
 
-    results += await asyncio.gather(*upload_tasks)
-
-    return {"status": "completed", "results": results}
+    return {"status": "done", "results": results}
