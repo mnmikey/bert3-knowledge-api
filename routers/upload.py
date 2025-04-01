@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from services.chunking import chunk_text
 from services.embeddings import embed_chunks
-from vector_store import upsert_vectors, compute_hash
+from vector_store import add_to_vector_store, compute_hash
 import fitz  # PyMuPDF
 
 router = APIRouter()
@@ -31,7 +31,7 @@ async def upload_file(
     doc_hash = compute_hash(text)
 
     try:
-        upsert_vectors(chunks, embeddings, filename=file.filename, doc_hash=doc_hash, overwrite=overwrite)
+        add_to_vector_store(chunks, embeddings, filename=file.filename, doc_hash=doc_hash, overwrite=overwrite)
     except ValueError:
         raise HTTPException(status_code=409, detail="Duplicate document. Use ?overwrite=true to replace.")
 
