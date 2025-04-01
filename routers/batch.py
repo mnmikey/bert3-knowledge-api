@@ -12,7 +12,7 @@ from vector_store import add_to_vector_store, compute_hash
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-@router.post("/batch_upload/")
+@router.post("/")
 async def batch_upload(
     files: List[UploadFile] = File(...),
     overwrite: bool = Query(default=False)
