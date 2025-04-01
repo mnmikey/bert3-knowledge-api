@@ -7,7 +7,7 @@ import logging
 
 from services.chunking import chunk_text
 from services.embeddings import embed_chunks
-from vector_store import add_to_vector_store
+from vector_store import add_to_vector_store, compute_hash
 
 router = APIRouter()
 
