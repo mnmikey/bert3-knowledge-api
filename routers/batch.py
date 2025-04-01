@@ -52,7 +52,7 @@ async def batch_upload(
             # Extract + embed + store
             chunks = chunk_text(tmp_path)
             embeddings = embed_chunks(chunks)
-            add_to_vector_store(embeddings, metadata={"filename": filename}, overwrite=overwrite)
+            add_to_vector_store(embeddings, overwrite=overwrite)
 
             os.remove(tmp_path)
 
