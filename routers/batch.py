@@ -24,7 +24,7 @@ def log_event(message: str):
 #    pass  # 🔜 Stubbed out for future memory integration
 
 
-@router.post("/batch_upload/")
+@router.post("/")
 async def batch_upload(
     files: List[UploadFile] = File(...),
     overwrite: bool = Query(default=False)
