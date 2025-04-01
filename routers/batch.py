@@ -1,54 +1,76 @@
 from fastapi import APIRouter, UploadFile, File, Query
 from typing import List
-import tempfile
-import os
-import asyncio
+import tempfile, os, asyncio, traceback
 
 from services.chunking import chunk_text
 from services.embeddings import embed_chunks
-from vector_store import add_to_vector_store
+from vector_store import add_to_vector_store, compute_hash
+
+from datetime import datetime
+from kingbert_firestore_memory_onrender_com__jit_plugin import storeMemory
 
 router = APIRouter()
 
 @router.post("/batch_upload/")
 async def batch_upload(
     files: List[UploadFile] = File(...),
-    overwrite: bool = Query(default=False)
+    overwrite: bool = Query(default=False),
 ):
+    timestamp = datetime.utcnow().isoformat()
+    session_id = "default"
     results = []
 
-    # Step 1: Read all file contents while request context is active
-    file_data = []
-    for file in files:
+    async def process(file: UploadFile):
+        temp_file_path = None
         try:
-            content = await file.read()
-            file_data.append((file.filename, content))
-        except Exception as e:
-            results.append({"file": file.filename, "error": f"read failure: {str(e)}"})
+            suffix = os.path.splitext(file.filename)[1]
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                temp_file_path = tmp.name
+                tmp.write(await file.read())
 
-    # Step 2: Process each file asynchronously
-    async def process_file(filename, content_bytes):
-        try:
-            text = content_bytes.decode("utf-8", errors="ignore")
-            chunks = chunk_text(text)
+            with open(temp_file_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+
+            chunks = chunk_text(content)
             embeddings = embed_chunks(chunks)
+            doc_hash = compute_hash(content)
 
             add_to_vector_store(
-                embeddings,
-                metadata={"filename": filename},
-                overwrite=overwrite
+                chunks=chunks,
+                embeddings=embeddings,
+                filename=file.filename,
+                doc_hash=doc_hash,
+                overwrite=overwrite,
+                source="batch_upload"
             )
 
-            print(f"✅ Uploaded {filename} | Chunks: {len(chunks)}")
-            return {"file": filename, "status": "uploaded", "chunks": len(chunks)}
+            result = {"filename": file.filename, "status": "✅ Success"}
         except Exception as e:
-            print(f"❌ Error uploading {filename}: {str(e)}")
-            return {"file": filename, "error": str(e)}
+            result = {
+                "filename": file.filename,
+                "status": "❌ Error",
+                "error": str(e),
+                "trace": traceback.format_exc(),
+            }
+        finally:
+            if temp_file_path and os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+            return result
 
-    upload_tasks = [
-        process_file(filename, content)
-        for filename, content in file_data
-    ]
+    results = await asyncio.gather(*[process(file) for file in files])
 
-    results += await asyncio.gather(*upload_tasks)
-    return {"status": "accepted", "results": results}
+    # Firestore memory logging (asynchronous, non-blocking)
+    try:
+        await storeMemory({
+            "session_id": session_id,
+            "key": "batch_upload_log",
+            "value": {
+                "timestamp": timestamp,
+                "results": results,
+                "tags": ["upload", "batch", "log"]
+            }
+        })
+    except Exception as log_err:
+        print("⚠️ Firestore logging failed:", log_err)
+
+    return {"results": results, "timestamp": timestamp}
