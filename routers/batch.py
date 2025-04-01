@@ -1,76 +1,70 @@
 from fastapi import APIRouter, UploadFile, File, Query
 from typing import List
-import tempfile, os, asyncio, traceback
+import tempfile
+import os
+import asyncio
+import logging
 
 from services.chunking import chunk_text
 from services.embeddings import embed_chunks
-from vector_store import add_to_vector_store, compute_hash
-
-from datetime import datetime
-from kingbert_firestore_memory_onrender_com__jit_plugin import storeMemory
+from vector_store import add_to_vector_store
 
 router = APIRouter()
+
+# --- Logging Setup ---
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+
+def log_event(message: str):
+    logging.info(message)
+
+
+# --- Optional future memory hook ---
+#def store_to_memory(*args, **kwargs):
+#    pass  # 🔜 Stubbed out for future memory integration
+
 
 @router.post("/batch_upload/")
 async def batch_upload(
     files: List[UploadFile] = File(...),
-    overwrite: bool = Query(default=False),
+    overwrite: bool = Query(default=False)
 ):
-    timestamp = datetime.utcnow().isoformat()
-    session_id = "default"
     results = []
+    file_data = []
 
-    async def process(file: UploadFile):
-        temp_file_path = None
+    # --- Pre-read file contents (avoids closed file handles) ---
+    for file in files:
         try:
-            suffix = os.path.splitext(file.filename)[1]
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                temp_file_path = tmp.name
-                tmp.write(await file.read())
-
-            with open(temp_file_path, "r", encoding="utf-8", errors="ignore") as f:
-                content = f.read()
-
-            chunks = chunk_text(content)
-            embeddings = embed_chunks(chunks)
-            doc_hash = compute_hash(content)
-
-            add_to_vector_store(
-                chunks=chunks,
-                embeddings=embeddings,
-                filename=file.filename,
-                doc_hash=doc_hash,
-                overwrite=overwrite,
-                source="batch_upload"
-            )
-
-            result = {"filename": file.filename, "status": "✅ Success"}
+            content = await file.read()
+            file_data.append((file.filename, content))
         except Exception as e:
-            result = {
-                "filename": file.filename,
-                "status": "❌ Error",
-                "error": str(e),
-                "trace": traceback.format_exc(),
-            }
-        finally:
-            if temp_file_path and os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
-            return result
+            msg = f"❌ Read failure: {file.filename} | {str(e)}"
+            log_event(msg)
+            results.append({"file": file.filename, "error": str(e)})
 
-    results = await asyncio.gather(*[process(file) for file in files])
+    # --- Async handler for each file ---
+    async def process_file(filename, contents):
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(contents)
+                tmp_path = tmp.name
 
-    # Firestore memory logging (asynchronous, non-blocking)
-    try:
-        await storeMemory({
-            "session_id": session_id,
-            "key": "batch_upload_log",
-            "value": {
-                "timestamp": timestamp,
-                "results": results,
-                "tags": ["upload", "batch", "log"]
-            }
-        })
-    except Exception as log_err:
-        print("⚠️ Firestore logging failed:", log_err)
+            # Extract + embed + store
+            chunks = chunk_text(tmp_path)
+            embeddings = embed_chunks(chunks)
+            add_to_vector_store(embeddings, metadata={"filename": filename}, overwrite=overwrite)
 
-    return {"results": results, "timestamp": timestamp}
+            os.remove(tmp_path)
+
+            log_event(f"✅ Uploaded: {filename}")
+            return {"file": filename, "status": "uploaded"}
+
+        except Exception as e:
+            log_event(f"❌ Error: {filename} | {str(e)}")
+            return {"file": filename, "error": str(e)}
+
+    # --- Run all uploads concurrently ---
+    upload_tasks = [process_file(fn, data) for fn, data in file_data]
+    results += await asyncio.gather(*upload_tasks)
+
+    return {"status": "accepted", "results": results}
