@@ -5,23 +5,27 @@ from uuid import uuid4
 
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import (
-    Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue, SearchRequest
+    Distance,
+    VectorParams,
+    PointStruct,
+    SearchRequest,
 )
 from qdrant_client.http.exceptions import ResponseHandlingException
 
 import openai
 
+# Setup logging
 logger = logging.getLogger("vector_store")
 logging.basicConfig(level=logging.INFO)
 
-# Env vars
+# ENV Vars
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION", "bert3_vector_store")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 openai.api_key = OPENAI_API_KEY
 
-# Init Qdrant
+# Init Qdrant client
 client = QdrantClient(
     url=QDRANT_URL,
     api_key=QDRANT_API_KEY,
@@ -35,7 +39,10 @@ def ensure_collection_exists():
             logger.info(f"Creating collection '{QDRANT_COLLECTION_NAME}'")
             client.recreate_collection(
                 collection_name=QDRANT_COLLECTION_NAME,
-                vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
+                vectors_config=VectorParams(
+                    size=1536,
+                    distance=Distance.COSINE,
+                ),
             )
     except ResponseHandlingException as e:
         logger.error(f"Error ensuring collection exists: {e}")
@@ -65,7 +72,10 @@ def add_to_vector_store(embeddings_with_chunks, metadata={}, overwrite=False):
 
     try:
         logger.info(f"Upserting {len(points)} vectors to Qdrant")
-        client.upsert(collection_name=QDRANT_COLLECTION_NAME, points=points)
+        client.upsert(
+            collection_name=QDRANT_COLLECTION_NAME,
+            points=points
+        )
     except Exception as e:
         logger.error(f"Vector upsert failed: {e}")
         raise
@@ -86,5 +96,5 @@ def semantic_search(query: str, top_k: int = 5):
         )
         return [hit.payload for hit in search_result]
     except Exception as e:
-        logger.error(f"❌ Semantic search failed: {e}")
+        logger.error(f"🚫 Semantic search failed: {e}")
         raise
