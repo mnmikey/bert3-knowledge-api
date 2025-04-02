@@ -32,7 +32,7 @@ COLLECTION_NAME = "bert3_vector_store"
 EMBEDDING_MODEL = "text-embedding-ada-002"
 QDRANT_URL = os.environ.get("QDRANT_URL")
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY")
-
+```
 
 Qdrant client is initialized securely via environment variables.
 
